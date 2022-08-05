@@ -1,0 +1,1316 @@
+---
+title: "Optimizing Whiff Probability for Pitcher X"
+author: "Will Moscato"
+date: '2022-07-29'
+output:
+  html_document: 
+    toc: true
+    toc_float: true
+    theme: united
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE, fig.align = "center")
+```
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library(readr)
+library(broom)
+library(ggplot2)
+library(tidymodels) 
+library(vip)
+library(stacks)
+library(DALEX)
+library(DALEXtra)
+library(themis)
+library(pitchRx)
+library(kableExtra)
+library(webshot)
+library(magick)
+library(viridis)
+tidymodels_prefer()
+
+theme_set(theme_minimal())
+```
+
+```{r}
+whiff <- read_csv("whiff.csv")
+```
+
+```{r}
+whiff_left <- whiff %>% 
+  filter(BatterSide == "Left")
+
+whiff_right <- whiff %>% 
+  filter(BatterSide == "Right")
+```
+
+```{r, include=FALSE}
+whiff %>% 
+  filter(c(Balls == 2 &Strikes == 0) | c(Balls == 3 & Strikes == 1)) %>% 
+  summarise(mean = mean(swing_prob))
+```
+
+```{r, include=FALSE}
+whiff %>% 
+  filter(c(Balls == 0 &Strikes == 2) | c(Balls == 1 & Strikes == 2) | c(Balls == 2 & Strikes == 2)) %>%
+  summarise(mean = mean(swing_prob))
+```
+
+```{r, include=FALSE}
+whiff %>% 
+  filter( c(Balls == 1 & Strikes == 1) | c(Balls == 3 & Strikes == 2)  | c(Balls == 2 & Strikes == 1)) %>% 
+  summarise(mean = mean(swing_prob))
+```
+
+```{r, include=FALSE}
+whiff %>% 
+  filter( c(Balls == 0 & Strikes == 0) | c(Balls == 0 & Strikes == 1) | c(Balls == 1 & Strikes == 0)) %>%
+  summarise(mean = mean(swing_prob))
+```
+
+# Outline
+- Optimizing overall pitch usage.
+- Optimizing movement profiles of each pitch.
+- Optimizing location for each pitch type.
+- Optimizing location and pitch usage in each type of count.
+
+
+
+# Breakdown of pitches thrown by Pitch Type
+
+## Total
+
+```{r}
+all_pitches <- whiff %>% 
+  group_by(PitchType) %>% 
+  summarise(total = n()) %>% 
+  mutate(`% of Usage` = (total/2716)*100) %>% 
+  arrange(desc(total))
+
+kable(all_pitches, align = c(rep('c', 1))) %>% 
+  row_spec(0) %>% 
+  kable_styling(full_width = T, bootstrap_options = "striped", font_size = 20) %>% 
+  add_header_above(c("Pitch Usage Table" = 3), background = "#FF9900", color = "white")
+```
+
+## Vs Left
+
+```{r}
+vs_left <- whiff_left %>% 
+  group_by(PitchType) %>% 
+  summarise(total = n()) %>% 
+  mutate(`% of Usage` = (total/1207)*100) %>% 
+  arrange(desc(total))
+
+kable(vs_left, align = c(rep('c', 1))) %>% 
+  row_spec(0) %>% 
+  kable_styling(full_width = T, bootstrap_options = "striped", font_size = 20) %>% 
+  add_header_above(c("Pitch Usage Vs Left Table" = 3), background = "#000099", color = "white")
+```
+
+## Vs Right
+
+```{r}
+vs_right <- whiff_right %>% 
+  group_by(PitchType) %>% 
+  summarise(total = n()) %>% 
+  mutate(`% of Usage` = (total/1509)*100) %>% 
+  arrange(desc(total))
+
+
+kable(vs_right, align = c(rep('c', 1))) %>% 
+  row_spec(0) %>% 
+  kable_styling(full_width = T, bootstrap_options = "striped", font_size = 20) %>% 
+  add_header_above(c("Pitch Usage Vs Right Table" = 3), background = "#006600", color = "white")
+```
+
+
+# Pitches by Whiff Probalbility
+
+## Vs Left
+
+```{r}
+left_whiff <- whiff_left %>% 
+  group_by(PitchType) %>% 
+  summarise(`Minimun Whiff Probability` = min(whiff_prob), `Maximum Whiff Probability` = max(whiff_prob), `Average whiff Probability` = mean(whiff_prob))
+
+kable(left_whiff, align = c(rep('c', 1))) %>% 
+  row_spec(0) %>% 
+  kable_styling(full_width = T, bootstrap_options = "striped", font_size = 20) %>% 
+  add_header_above(c("Whiff Probabilites by Pitch Type Vs Left" = 4), background = "#000099", color = "white")
+```
+
+## Vs Right
+
+```{r}
+right_whiff <- whiff_right %>% 
+  group_by(PitchType) %>% 
+ summarise(`Minimun Whiff Probability` = min(whiff_prob), `Maximum Whiff Probability` = max(whiff_prob), `Average whiff Probability` = mean(whiff_prob))
+
+kable(right_whiff, align = c(rep('c', 1))) %>% 
+  row_spec(0) %>% 
+  kable_styling(full_width = T, bootstrap_options = "striped", font_size = 20) %>% 
+  add_header_above(c("Whiff Probabilities by Pitch Type Vs Right" = 4), background = "#006600", color = "white")
+```
+
+```{r, include=FALSE}
+whiff_left %>% 
+  filter(PitchType == "CUTTER") %>% 
+  arrange(desc(whiff_prob)) %>% 
+  head(20)
+```
+
+```{r, include=FALSE}
+whiff_left %>% 
+  filter(PitchType == "CHANGEUP") %>% 
+  arrange(desc(whiff_prob)) %>% 
+  head(10)
+```
+
+```{r, include=FALSE}
+whiff_left %>% 
+  filter(PitchType == "FASTBALL") %>% 
+  arrange(desc(whiff_prob)) %>% 
+  head(10)
+```
+
+```{r, include=FALSE}
+whiff_left %>% 
+  filter(PitchType == "CURVEBALL") %>% 
+  arrange(desc(whiff_prob)) %>% 
+  head(10)
+```
+
+```{r, include=FALSE}
+whiff_right %>% 
+  filter(PitchType == "CUTTER") %>% 
+  arrange(desc(whiff_prob)) %>% 
+  head(20)
+```
+
+```{r, include=FALSE}
+whiff_right %>% 
+  filter(PitchType == "CHANGEUP") %>% 
+  arrange(desc(whiff_prob)) %>% 
+  head(20)
+```
+
+```{r, include=FALSE}
+whiff_right %>% 
+  filter(PitchType == "FASTBALL") %>% 
+  arrange(desc(whiff_prob)) %>% 
+  head(20)
+```
+
+```{r, include=FALSE}
+whiff_right %>% 
+  filter(PitchType == "CURVEBALL") %>% 
+  arrange(desc(whiff_prob)) %>% 
+  head(20)
+```
+
+```{r}
+topKzone = 3.7
+botKzone = 1.5
+inKzone = -.95
+outKzone = 0.95
+kZone = data.frame(
+  x = c(inKzone, inKzone, outKzone, outKzone, inKzone)
+  , y = c(botKzone, topKzone, topKzone, botKzone, botKzone)
+)
+```
+
+## Takeaways from this section
+
+The big takeaway is that the changeup needs to be thrown more to righties. 
+
+# Movement profiles
+
+## Vs Left
+
+### All pitches
+
+```{r}
+movement_left <- whiff_left %>% 
+  group_by(PitchType) %>% 
+  summarise(avg_velo = mean(ReleaseSpeed), avg_vert_break = mean(InducedVertBreak), avg_horz_break = mean(HorzBreak), avg_release_height = mean(ReleaseHeight), avg_release_side = mean(ReleaseSide), avg_extension = mean(Extension), avg_spin = mean(SpinRate), avg_spin_axis = mean(SpinAxis))
+
+
+kable(movement_left, align = c(rep('c', 1)), col.names = c("Pitch Type", "Average Velocity", "Average Induced Vertical Break", "Average Horizontal Break", "Average Release Height", "Average Release Side", "Average Extension", "Average Spin Rate", "Average Spin Axis")) %>% 
+  row_spec(0) %>% 
+  kable_styling(full_width = F, bootstrap_options = "striped", font_size = 20) %>% 
+  add_header_above(c("Pitch Profiles by Pitch Type" = 9), background = "#000099", color = "white")
+  
+```
+
+### Best Whiff Probabilties by Pitch Type
+
+```{r}
+movement_left_best <- whiff_left %>% 
+  group_by(PitchType) %>% 
+  top_n(10, whiff_prob) %>% 
+  summarise(avg_velo = mean(ReleaseSpeed), avg_vert_break = mean(InducedVertBreak), avg_horz_break = mean(HorzBreak), avg_release_height = mean(ReleaseHeight), avg_release_side = mean(ReleaseSide), avg_extension = mean(Extension), avg_spin = mean(SpinRate), avg_spin_axis = mean(SpinAxis))
+
+
+kable(movement_left_best, align = c(rep('c', 1)), col.names = c("Pitch Type", "Average Velocity", "Average Induced Vertical Break", "Average Horizontal Break", "Average Release Height", "Average Release Side", "Average Extension", "Average Spin Rate", "Average Spin Axis")) %>% 
+  row_spec(0) %>% 
+  kable_styling(full_width = F, bootstrap_options = "striped", font_size = 20) %>% 
+  add_header_above(c("Best Pitch Profiles by Pitch Type" = 9), background = "#000099", color = "white")
+```
+
+### Worst Whiff Probabilities by Pitch Type
+
+```{r}
+movement_left_worst <- whiff_left %>% 
+  filter(swing_prob > .5) %>% 
+  group_by(PitchType) %>% 
+  top_n(-10, whiff_prob) %>% 
+  summarise(avg_velo = mean(ReleaseSpeed), avg_vert_break = mean(InducedVertBreak), avg_horz_break = mean(HorzBreak), avg_release_height = mean(ReleaseHeight), avg_release_side = mean(ReleaseSide), avg_extension = mean(Extension), avg_spin = mean(SpinRate), avg_spin_axis = mean(SpinAxis))
+
+
+kable(movement_left_worst, align = c(rep('c', 1)), col.names = c("Pitch Type", "Average Velocity", "Average Induced Vertical Break", "Average Horizontal Break", "Average Release Height", "Average Release Side", "Average Extension", "Average Spin Rate", "Average Spin Axis")) %>% 
+  row_spec(0) %>% 
+  kable_styling(full_width = F, bootstrap_options = "striped", font_size = 20) %>% 
+  add_header_above(c("Worst Pitch Profiles by Pitch Type" = 9), background = "#000099", color = "white")
+```
+
+### Closer Look at Best Changeups
+
+```{r}
+change_best <- whiff_left %>% 
+  filter(PitchType == "CHANGEUP") %>% 
+  top_n(10, whiff_prob) %>% 
+  select(PitchType, ReleaseSpeed, InducedVertBreak, HorzBreak, SpinRate, SpinAxis, whiff_prob) %>% 
+  arrange(desc(whiff_prob))
+
+
+kable(change_best, align = c(rep('c', 1)), col.names = c("Pitch Type", "Velocity", "Induced Vertical Break", "Horizontal Break", " Spin Rate", "Spin Axis", "Whiff Probability")) %>% 
+  row_spec(0) %>% 
+  kable_styling(full_width = T, bootstrap_options = "striped", font_size = 20) %>% 
+  add_header_above(c("Best Changeups Vs Left" = 7), background = "#000099", color = "white")
+```
+
+### Closer Look at Worst Changeups
+
+```{r}
+change_worst <- whiff_left %>% 
+  filter(PitchType == "CHANGEUP") %>% 
+  filter(swing_prob > .5) %>% 
+  select(PitchType, ReleaseSpeed, InducedVertBreak, HorzBreak, SpinRate, SpinAxis, whiff_prob) %>% 
+  top_n(-10, whiff_prob) %>% 
+  arrange(-desc(whiff_prob))
+
+
+kable(change_worst, align = c(rep('c', 1)), col.names = c("Pitch Type", "Velocity", "Induced Vertical Break", "Horizontal Break", " Spin Rate", "Spin Axis", "Whiff Probability")) %>% 
+  row_spec(0) %>% 
+  kable_styling(full_width = T, bootstrap_options = "striped", font_size = 20) %>% 
+  add_header_above(c("Worst Changeups Vs Left" = 7), background = "#000099", color = "white")
+```
+
+## Vs Right
+
+### All pitches
+
+```{r}
+movement_right_whiff <- whiff_right %>% 
+  group_by(PitchType) %>% 
+  summarise(avg_velo = mean(ReleaseSpeed), avg_vert_break = mean(InducedVertBreak), avg_horz_break = mean(HorzBreak), avg_release_height = mean(ReleaseHeight), avg_release_side = mean(ReleaseSide), avg_extension = mean(Extension), avg_spin = mean(SpinRate), avg_spin_axis = mean(SpinAxis))
+
+
+kable(movement_right_whiff, align = c(rep('c', 1)), col.names = c("Pitch Type", "Average Velocity", "Average Induced Vertical Break", "Average Horizontal Break", "Average Release Height", "Average Release Side", "Average Extension", "Average Spin Rate", "Average Spin Axis")) %>% 
+  row_spec(0) %>% 
+  kable_styling(full_width = F, bootstrap_options = "striped", font_size = 20) %>% 
+  add_header_above(c("Pitch Profiles by Pitch Type" = 9), background = "#006600", color = "white")
+```
+
+### Best Whiff Probabilties by Pitch Type
+
+```{r}
+movement_right_best <- whiff_right %>% 
+  group_by(PitchType) %>% 
+  top_n(10, whiff_prob) %>% 
+  summarise(avg_velo = mean(ReleaseSpeed), avg_vert_break = mean(InducedVertBreak), avg_horz_break = mean(HorzBreak), avg_release_height = mean(ReleaseHeight), avg_release_side = mean(ReleaseSide), avg_extension = mean(Extension), avg_spin = mean(SpinRate), avg_spin_axis = mean(SpinAxis))
+
+
+kable(movement_right_best, align = c(rep('c', 1)), col.names = c("Pitch Type", "Average Velocity", "Average Induced Vertical Break", "Average Horizontal Break", "Average Release Height", "Average Release Side", "Average Extension", "Average Spin Rate", "Average Spin Axis")) %>% 
+  row_spec(0) %>% 
+  kable_styling(full_width = F, bootstrap_options = "striped", font_size = 20) %>% 
+  add_header_above(c("Best Pitch Profiles by Pitch Type" = 9), background = "#006600", color = "white")
+```
+
+### Worst Whiff Probabilties by Pitch Type
+
+```{r}
+movement_right_worst <- whiff_right %>% 
+  filter(swing_prob > .5) %>% 
+  group_by(PitchType) %>% 
+  top_n(-10, whiff_prob) %>% 
+  summarise(avg_velo = mean(ReleaseSpeed), avg_vert_break = mean(InducedVertBreak), avg_horz_break = mean(HorzBreak), avg_release_height = mean(ReleaseHeight), avg_release_side = mean(ReleaseSide), avg_extension = mean(Extension), avg_spin = mean(SpinRate), avg_spin_axis = mean(SpinAxis))
+
+
+kable(movement_right_worst, align = c(rep('c', 1)), col.names = c("Pitch Type", "Average Velocity", "Average Induced Vertical Break", "Average Horizontal Break", "Average Release Height", "Average Release Side", "Average Extension", "Average Spin Rate", "Average Spin Axis")) %>% 
+  row_spec(0) %>% 
+  kable_styling(full_width = F, bootstrap_options = "striped", font_size = 20) %>% 
+  add_header_above(c("Worst Pitch Profiles by Pitch Type" = 9), background = "#006600", color = "white")
+```
+
+### Closer Look into Best Cutters
+
+```{r}
+cutter_best <- whiff_right %>% 
+  filter(PitchType == "CUTTER") %>% 
+  select(PitchType, ReleaseSpeed, InducedVertBreak, HorzBreak, SpinRate, SpinAxis, whiff_prob) %>% 
+  top_n(10, whiff_prob) %>% 
+  arrange(-desc(whiff_prob))
+
+
+kable(cutter_best, align = c(rep('c', 1)), col.names = c("Pitch Type", "Velocity", "Induced Vertical Break", "Horizontal Break", " Spin Rate", "Spin Axis", "Whiff Probability")) %>% 
+  row_spec(0) %>% 
+  kable_styling(full_width = T, bootstrap_options = "striped", font_size = 20) %>% 
+  add_header_above(c("Best Cutters Vs Left" = 7), background = "#006600", color = "white")
+```
+
+### Closer Look into Worst Cutters
+
+```{r}
+cutter_worst <- whiff_right %>% 
+  filter(PitchType == "CUTTER") %>% 
+  filter(swing_prob > .5) %>% 
+  select(PitchType, ReleaseSpeed, InducedVertBreak, HorzBreak, SpinRate, SpinAxis, whiff_prob) %>% 
+  top_n(-10, whiff_prob) %>% 
+  arrange(-desc(whiff_prob))
+
+
+kable(cutter_worst, align = c(rep('c', 1)), col.names = c("Pitch Type", "Velocity", "Induced Vertical Break", "Horizontal Break", " Spin Rate", "Spin Axis", "Whiff Probability")) %>% 
+  row_spec(0) %>% 
+  kable_styling(full_width = T, bootstrap_options = "striped", font_size = 20) %>% 
+  add_header_above(c("Worst Cutters Vs Left" = 7), background = "#006600", color = "white")
+```
+
+## Takeaways from this section
+Both the changeup and the cutter are better when the induced vertical break is lower. This is something that can be worked on in a bullpen on Rapsodo to try to be more consistent in this movement.  
+
+# By Location
+
+## Fastballs
+
+### Vs Left
+
+```{r}
+whiff_left %>% 
+  filter(PitchType == "FASTBALL") %>% 
+  ggplot(aes(x = PlateSide, y = PlateHeight)) +
+  geom_point(color = "red") +
+  xlim(-5, 5) +
+  ylim(-1, 5) +
+  geom_path(aes(x, y), data = kZone)
+```
+```{r, include=FALSE}
+whiff %>% 
+  filter(PitchType == "FASTBALL" & PlateHeight > 3 & PlateHeight < 4) %>% 
+  group_by(PitchType) %>% 
+  summarise(avg_whiff = mean(whiff_prob))
+
+whiff_left %>% 
+  filter(PitchType == "FASTBALL" & PlateHeight > 3 & PlateHeight < 4) %>% 
+  group_by(PitchType) %>% 
+  summarise(avg_whiff = mean(whiff_prob))
+
+whiff_right %>% 
+  filter(PitchType == "FASTBALL" & PlateHeight > 3 & PlateHeight < 4) %>% 
+  group_by(PitchType) %>% 
+  summarise(avg_whiff = mean(whiff_prob))
+```
+
+#### Best Whiff Probabilities
+
+```{r}
+whiff_left %>% 
+  filter(PitchType == "FASTBALL") %>% 
+  top_n(20, whiff_prob) %>% 
+  ggplot(aes(x = PlateSide, y = PlateHeight)) +
+  geom_point(color = "red") +
+  xlim(-5, 5) +
+  ylim(-1, 5) +
+  geom_path(aes(x, y), data = kZone)
+```
+
+#### Worst Whiff Probabilities
+
+```{r}
+whiff_left %>% 
+  filter(PitchType == "FASTBALL" & swing_prob > .50) %>% 
+  top_n(-20, whiff_prob) %>% 
+  ggplot(aes(x = PlateSide, y = PlateHeight)) +
+  geom_point(color = "red") +
+  xlim(-5, 5) +
+  ylim(-1, 5) +
+  geom_path(aes(x, y), data = kZone)
+```
+
+### Vs Right
+
+```{r}
+whiff_right%>% 
+  filter(PitchType == "FASTBALL") %>% 
+  ggplot(aes(x = PlateSide, y = PlateHeight)) +
+  geom_point(color = "red") +
+  xlim(-5, 5) +
+  ylim(-1, 5) +
+  geom_path(aes(x, y), data = kZone)
+```
+
+#### Best Whiff Probabilities
+
+```{r}
+whiff_right%>% 
+  filter(PitchType == "FASTBALL") %>% 
+  top_n(20, whiff_prob) %>% 
+  ggplot(aes(x = PlateSide, y = PlateHeight)) +
+  geom_point(color = "red") +
+  xlim(-5, 5) +
+  ylim(-1, 5) +
+  geom_path(aes(x, y), data = kZone)
+```
+
+#### Worst Whiff Probabilities
+
+```{r}
+whiff_right %>% 
+  filter(PitchType == "FASTBALL" & swing_prob > .50) %>% 
+  top_n(-20, whiff_prob) %>% 
+  ggplot(aes(x = PlateSide, y = PlateHeight)) +
+  geom_point(color = "red") +
+  xlim(-5, 5) +
+  ylim(-1, 5) +
+  geom_path(aes(x, y), data = kZone)
+```
+
+
+## Cutters
+
+### Vs Left
+
+```{r}
+whiff_left %>% 
+  filter(PitchType == "CUTTER") %>% 
+  ggplot(aes(x = PlateSide, y = PlateHeight)) +
+  geom_point(color = "#000099") +
+  xlim(-5, 5) +
+  ylim(-1, 5) +
+  geom_path(aes(x, y), data = kZone)
+```
+```{r, include=FALSE}
+whiff %>% 
+  filter(PitchType == "CUTTER" & PlateHeight > 1 & PlateHeight < 2 & PlateSide < 0) %>% 
+  group_by(PitchType) %>% 
+  summarise(avg_whiff = mean(whiff_prob))
+
+whiff_left %>% 
+  filter(PitchType == "CUTTER" & PlateHeight > 1 & PlateHeight < 2 & PlateSide < 0) %>% 
+  group_by(PitchType) %>% 
+  summarise(avg_whiff = mean(whiff_prob))
+
+whiff_right %>% 
+  filter(PitchType == "CUTTER" & PlateHeight > .5 & PlateHeight < 1.5 & PlateSide < 0) %>% 
+  group_by(PitchType) %>% 
+  summarise(avg_whiff = mean(whiff_prob))
+```
+
+#### Best Whiff Probabilities
+
+```{r}
+whiff_left %>% 
+  filter(PitchType == "CUTTER") %>% 
+  top_n(20, whiff_prob) %>% 
+  ggplot(aes(x = PlateSide, y = PlateHeight)) +
+  geom_point(color = "#000099") +
+  xlim(-5, 5) +
+  ylim(-1, 5) +
+  geom_path(aes(x, y), data = kZone)
+```
+
+#### Worst Whiff Probabilities
+
+```{r}
+whiff_left %>% 
+  filter(PitchType == "CUTTER" & swing_prob > .50) %>% 
+  top_n(-20, whiff_prob) %>% 
+  ggplot(aes(x = PlateSide, y = PlateHeight)) +
+  geom_point(color = "#000099") +
+  xlim(-5, 5) +
+  ylim(-1, 5) +
+  geom_path(aes(x, y), data = kZone)
+```
+
+### Vs Right
+
+```{r}
+whiff_right %>% 
+  filter(PitchType == "CUTTER") %>% 
+  ggplot(aes(x = PlateSide, y = PlateHeight)) +
+  geom_point(color = "#000099") +
+  xlim(-5, 5) +
+  ylim(-1, 5) +
+  geom_path(aes(x, y), data = kZone)
+```
+
+#### Best Whiff Probabilities
+
+```{r}
+whiff_right %>% 
+  filter(PitchType == "CUTTER") %>% 
+  top_n(20, whiff_prob) %>% 
+  ggplot(aes(x = PlateSide, y = PlateHeight)) +
+  geom_point(color = "#000099") +
+  xlim(-5, 5) +
+  ylim(-1, 5) +
+  geom_path(aes(x, y), data = kZone)
+```
+
+#### Worst Whiff Probabilities
+
+```{r}
+whiff_right %>% 
+  filter(PitchType == "CUTTER" & swing_prob > .50) %>% 
+  top_n(-20, whiff_prob) %>% 
+  ggplot(aes(x = PlateSide, y = PlateHeight)) +
+  geom_point(color = "#000099") +
+  xlim(-5, 5) +
+  ylim(-1, 5) +
+  geom_path(aes(x, y), data = kZone)
+```
+
+## Changeups
+
+### Vs Left
+
+```{r}
+whiff_left %>% 
+  filter(PitchType == "CHANGEUP") %>% 
+  ggplot(aes(x = PlateSide, y = PlateHeight)) +
+  geom_point(color = "#006600") +
+  xlim(-5, 5) +
+  ylim(-1, 5) +
+  geom_path(aes(x, y), data = kZone)
+```
+
+```{r, include=FALSE}
+whiff %>% 
+  filter(PitchType == "CHANGEUP" & PlateHeight > 1 & PlateHeight < 2 & PlateSide > 0) %>% 
+  group_by(PitchType) %>% 
+  summarise(avg_whiff = mean(whiff_prob))
+
+whiff_left %>% 
+  filter(PitchType == "CHANGEUP" & PlateHeight > 1 & PlateHeight < 2 & PlateSide > 0) %>% 
+  group_by(PitchType) %>% 
+  summarise(avg_whiff = mean(whiff_prob))
+
+whiff_right %>% 
+  filter(PitchType == "CHANGEUP" & PlateHeight > 1 & PlateHeight < 2 & PlateSide > 0) %>% 
+  group_by(PitchType) %>% 
+  summarise(avg_whiff = mean(whiff_prob))
+```
+
+#### Best Whiff Probabilities
+
+```{r}
+whiff_left %>% 
+  filter(PitchType == "CHANGEUP") %>% 
+  top_n(20, whiff_prob) %>% 
+  ggplot(aes(x = PlateSide, y = PlateHeight)) +
+  geom_point(color = "#006600") +
+  xlim(-5, 5) +
+  ylim(-1, 5) +
+  geom_path(aes(x, y), data = kZone)
+```
+
+#### Worst Whiff Probabilities
+
+```{r}
+whiff_left %>% 
+  filter(PitchType == "CHANGEUP" & swing_prob > .50) %>% 
+  top_n(-20, whiff_prob) %>% 
+  ggplot(aes(x = PlateSide, y = PlateHeight)) +
+  geom_point(color = "#006600") +
+  xlim(-5, 5) +
+  ylim(-1, 5) +
+  geom_path(aes(x, y), data = kZone)
+```
+
+### Vs Right
+
+```{r}
+whiff_right %>% 
+  filter(PitchType == "CHANGEUP") %>% 
+  ggplot(aes(x = PlateSide, y = PlateHeight)) +
+  geom_point(color = "#006600") +
+  xlim(-5, 5) +
+  ylim(-1, 5) +
+  geom_path(aes(x, y), data = kZone)
+```
+
+#### Best Whiff Probabilities
+
+```{r}
+whiff_right %>% 
+  filter(PitchType == "CHANGEUP") %>% 
+  top_n(20, whiff_prob) %>% 
+  ggplot(aes(x = PlateSide, y = PlateHeight)) +
+  geom_point(color = "#006600") +
+  xlim(-5, 5) +
+  ylim(-1, 5) +
+  geom_path(aes(x, y), data = kZone)
+```
+
+#### Worst Whiff Probabilities
+
+```{r}
+whiff_right %>% 
+  filter(PitchType == "CHANGEUP" & swing_prob > .50) %>% 
+  top_n(-20, whiff_prob) %>% 
+  ggplot(aes(x = PlateSide, y = PlateHeight)) +
+  geom_point(color = "#006600") +
+  xlim(-5, 5) +
+  ylim(-1, 5) +
+  geom_path(aes(x, y), data = kZone)
+```
+
+
+## Curveballs
+
+### Vs Left
+
+```{r}
+whiff_left %>% 
+  filter(PitchType == "CURVEBALL") %>% 
+  ggplot(aes(x = PlateSide, y = PlateHeight)) +
+  geom_point(color = "#FF9900") +
+  xlim(-5, 5) +
+  ylim(-1, 5) +
+  geom_path(aes(x, y), data = kZone)
+```
+```{r, include=FALSE}
+whiff %>% 
+  filter(PitchType == "CURVEBALL" & PlateHeight > .5 & PlateHeight < 1.5) %>% 
+  group_by(PitchType) %>% 
+  summarise(avg_whiff = mean(whiff_prob))
+
+whiff_left %>% 
+  filter(PitchType == "CURVEBALL" & PlateHeight > .5 & PlateHeight < 1.5) %>% 
+  group_by(PitchType) %>% 
+  summarise(avg_whiff = mean(whiff_prob))
+
+whiff_right %>% 
+  filter(PitchType == "CURVEBALL" & PlateHeight > .5 & PlateHeight < 1.5) %>% 
+  group_by(PitchType) %>% 
+  summarise(avg_whiff = mean(whiff_prob))
+```
+
+#### Best Whiff Probabilities
+
+```{r}
+whiff_left %>% 
+  filter(PitchType == "CURVEBALL") %>% 
+  top_n(20, whiff_prob) %>% 
+  ggplot(aes(x = PlateSide, y = PlateHeight)) +
+  geom_point(color = "#FF9900") +
+  xlim(-5, 5) +
+  ylim(-1, 5) +
+  geom_path(aes(x, y), data = kZone)
+```
+
+#### Worst Whiff Probabilities
+
+```{r}
+whiff_left %>% 
+  filter(PitchType == "CURVEBALL" & swing_prob > .50) %>% 
+  top_n(-20, whiff_prob) %>% 
+  ggplot(aes(x = PlateSide, y = PlateHeight)) +
+  geom_point(color = "#FF9900") +
+  xlim(-5, 5) +
+  ylim(-1, 5) +
+  geom_path(aes(x, y), data = kZone)
+```
+
+### Vs Right
+
+```{r}
+whiff_right %>% 
+  filter(PitchType == "CURVEBALL") %>% 
+  ggplot(aes(x = PlateSide, y = PlateHeight)) +
+  geom_point(color = "#FF9900") +
+  xlim(-5, 5) +
+  ylim(-1, 5) +
+  geom_path(aes(x, y), data = kZone)
+```
+
+#### Best Whiff Probabilities
+
+```{r}
+whiff_right %>% 
+  filter(PitchType == "CURVEBALL") %>% 
+  top_n(20, whiff_prob) %>% 
+  ggplot(aes(x = PlateSide, y = PlateHeight)) +
+  geom_point(color = "#FF9900") +
+  xlim(-5, 5) +
+  ylim(-1, 5) +
+  geom_path(aes(x, y), data = kZone)
+```
+
+#### Worst Whiff Probabilities
+
+```{r}
+whiff_right %>% 
+  filter(PitchType == "CURVEBALL" & swing_prob > .50) %>% 
+  top_n(-20, whiff_prob) %>% 
+  ggplot(aes(x = PlateSide, y = PlateHeight)) +
+  geom_point(color = "#FF9900") +
+  xlim(-5, 5) +
+  ylim(-1, 5) +
+  geom_path(aes(x, y), data = kZone)
+```
+
+## Takeaways from this section
+The biggest takeaway is that the fastballs are best in terms of whiff probability when up in the zone. Other than that, it is what you expect it to be with the good offspeed stuff being down and the bad being up. One other interesting thing is that changeups and cutters both do the best on the same side of the plate against righties and lefties.  
+
+
+# By Count
+
+## Hitter's Counts
+
+
+### Vs Left Total
+
+```{r}
+whiff_left %>% 
+  filter(c(Balls == 2 &Strikes == 0) | c(Balls == 3 & Strikes == 1)) %>% 
+  ggplot(aes(x = PlateSide, y = PlateHeight)) +
+  geom_point(aes(color = PitchType)) + 
+  scale_color_manual(values = c("#006600", "#000099", "red")) +
+  xlim(-5, 5) +
+  ylim(-1, 5) +
+  geom_path(aes(x, y), data = kZone)
+```
+
+### Best Whiff Probabilities Vs Left
+
+```{r}
+whiff_left %>% 
+  filter(c(Balls == 2 &Strikes == 0) | c(Balls == 3 & Strikes == 1)) %>% 
+  top_n(20, whiff_prob) %>% 
+  ggplot(aes(x = PlateSide, y = PlateHeight)) +
+  geom_point(aes(color = PitchType, size = whiff_prob)) + 
+  scale_color_manual(values = c("#006600", "#000099", "red")) +
+  xlim(-5, 5) +
+  ylim(-1, 5) +
+  geom_path(aes(x, y), data = kZone)
+```
+
+### Worst Whiff Probabilities Vs Left
+
+```{r}
+whiff_left %>% 
+  filter(swing_prob > .5) %>% 
+  filter(c(Balls == 2 &Strikes == 0) | c(Balls == 3 & Strikes == 1)) %>% 
+  top_n(-10, whiff_prob) %>% 
+  ggplot(aes(x = PlateSide, y = PlateHeight)) +
+  geom_point(aes(color = PitchType)) +
+  scale_color_manual(values = c("#000099", "red")) +
+  xlim(-5, 5) +
+  ylim(-1, 5) +
+  geom_path(aes(x, y), data = kZone)
+```
+
+### Change in Whiff Probabilities Vs Left
+
+```{r}
+hitters_left <- whiff_left %>% 
+  filter(c(Balls == 2 &Strikes == 0) | c(Balls == 3 & Strikes == 1)) %>% 
+  group_by(PitchType) %>% 
+  summarise(avg_whiff = mean(whiff_prob))
+
+diff_hitters_left <- whiff_left %>% 
+  group_by(PitchType) %>% 
+  summarise(total_avg_whiff = mean(whiff_prob)) %>% 
+  right_join(hitters_left) %>% 
+  mutate(whiff_dif = avg_whiff - total_avg_whiff)
+
+kable(diff_hitters_left, align = c(rep('c', 1)), col.names = c("Pitch Type", "Average Whiff Probability", "Average Whiff Probability in Hitter's Count", "Change in Whiff Probability due to Count")) %>% 
+  row_spec(0) %>% 
+  kable_styling(full_width = T, bootstrap_options = "striped", font_size = 20) %>% 
+  add_header_above(c("Change in Whiff Probabilty in Hitter's Counts Vs Left" = 4), background = "#000099", color = "white")
+
+```
+
+
+### Vs Right Total
+
+```{r}
+whiff_right %>% 
+  filter(c(Balls == 2 &Strikes == 0) | c(Balls == 3 & Strikes == 1)) %>% 
+  ggplot(aes(x = PlateSide, y = PlateHeight)) +
+  geom_point(aes(color = PitchType)) + 
+  scale_color_manual(values = c("#006600", "#FF9900", "#000099", "red")) +
+  xlim(-5, 5) +
+  ylim(-1, 5) +
+  geom_path(aes(x, y), data = kZone)
+```
+
+### Best Whiff Probabilities Vs Right
+
+```{r}
+whiff_right %>% 
+  filter(c(Balls == 2 &Strikes == 0) | c(Balls == 3 & Strikes == 1)) %>% 
+  top_n(20, whiff_prob) %>% 
+  ggplot(aes(x = PlateSide, y = PlateHeight)) +
+  geom_point(aes(color = PitchType, size = whiff_prob)) +
+  scale_color_manual(values = c("#FF9900","#000099", "red")) +
+  xlim(-5, 5) +
+  ylim(-1, 5) +
+  geom_path(aes(x, y), data = kZone)
+```
+
+### Worst Whiff Probabilities Vs Right
+
+```{r}
+whiff_right %>%
+  filter(swing_prob > .5) %>% 
+  filter(c(Balls == 2 &Strikes == 0) | c(Balls == 3 & Strikes == 1)) %>% 
+  top_n(-10, whiff_prob) %>% 
+  ggplot(aes(x = PlateSide, y = PlateHeight)) +
+  geom_point(aes(color = PitchType)) +
+  scale_color_manual(values = c("#000099", "red")) +
+  xlim(-5, 5) +
+  ylim(-1, 5) +
+  geom_path(aes(x, y), data = kZone)
+```
+
+### Change in Whiff Probabilities Vs Right
+
+```{r}
+hitters_right <- whiff_right %>% 
+  filter(c(Balls == 2 &Strikes == 0) | c(Balls == 3 & Strikes == 1)) %>% 
+  group_by(PitchType) %>% 
+  summarise(avg_whiff = mean(whiff_prob))
+
+diff_hitters_right <- whiff_right %>% 
+  group_by(PitchType) %>% 
+  summarise(total_avg_whiff = mean(whiff_prob)) %>% 
+  right_join(hitters_right) %>% 
+  mutate(whiff_dif = avg_whiff - total_avg_whiff)
+
+kable(diff_hitters_right, align = c(rep('c', 1)), col.names = c("Pitch Type", "Average Whiff Probability", "Average Whiff Probability in Hitter's Count", "Change in Whiff Probability due to Count")) %>% 
+  row_spec(0) %>% 
+  kable_styling(full_width = T, bootstrap_options = "striped", font_size = 20) %>% 
+  add_header_above(c("Change in Whiff Probabilty in Hitter's Counts Vs Right" = 4), background = "#006600", color = "white")
+
+```
+
+
+## Pitcher's Count
+
+### Vs Left Total
+
+```{r}
+whiff_left %>% 
+  filter(c(Balls == 0 &Strikes == 2) | c(Balls == 1 & Strikes == 2) | c(Balls == 2 & Strikes == 2)) %>% 
+  ggplot(aes(x = PlateSide, y = PlateHeight)) +
+  geom_point(aes(color = PitchType)) +
+  scale_color_manual(values = c("#006600", "#FF9900", "#000099", "red")) +
+  xlim(-5, 5) +
+  ylim(-1, 5) +
+  geom_path(aes(x, y), data = kZone)
+```
+
+### Best Whiff Probabilities Vs Left
+
+```{r}
+whiff_left %>% 
+  filter(c(Balls == 0 &Strikes == 2) | c(Balls == 1 & Strikes == 2) | c(Balls == 2 & Strikes == 2)) %>% 
+  top_n(20, whiff_prob) %>% 
+  ggplot(aes(x = PlateSide, y = PlateHeight)) +
+  geom_point(aes(color = PitchType, size = whiff_prob)) +
+  scale_color_manual(values = c("#006600", "#FF9900", "#000099", "red")) +
+  xlim(-5, 5) +
+  ylim(-1, 5) +
+  geom_path(aes(x, y), data = kZone)
+```
+
+### Worst Whiff Probabilities Vs Left
+
+```{r}
+whiff_left %>% 
+  filter(swing_prob > .5) %>% 
+  filter(c(Balls == 0 &Strikes == 2) | c(Balls == 1 & Strikes == 2) | c(Balls == 2 & Strikes == 2)) %>% 
+  top_n(-10, whiff_prob) %>% 
+  ggplot(aes(x = PlateSide, y = PlateHeight)) +
+  geom_point(aes(color = PitchType)) +
+  scale_color_manual(values = c("#000099", "red")) +
+  xlim(-5, 5) +
+  ylim(-1, 5) +
+  geom_path(aes(x, y), data = kZone)
+```
+
+### Change in Whiff Probability Vs Left
+
+```{r}
+pitchers_left <- whiff_left %>% 
+  filter(c(Balls == 0 &Strikes == 2) | c(Balls == 1 & Strikes == 2) | c(Balls == 2 & Strikes == 2)) %>% 
+  group_by(PitchType) %>% 
+  summarise(avg_whiff = mean(whiff_prob))
+
+diff_pitchers_left <- whiff_left %>% 
+  group_by(PitchType) %>% 
+  summarise(total_avg_whiff = mean(whiff_prob)) %>% 
+  right_join(pitchers_left) %>% 
+  mutate(whiff_dif = avg_whiff - total_avg_whiff)
+
+kable(diff_pitchers_left, align = c(rep('c', 1)), col.names = c("Pitch Type", "Average Whiff Probability", "Average Whiff Probability in Pitcher's Count", "Change in Whiff Probability due to Count")) %>% 
+  row_spec(0) %>% 
+  kable_styling(full_width = T, bootstrap_options = "striped", font_size = 20) %>% 
+  add_header_above(c("Change in Whiff Probabilty in Pitcher's Counts Vs Left" = 4), background = "#000099", color = "white")
+
+```
+
+### Vs Right Total
+
+```{r}
+whiff_right %>% 
+  filter(c(Balls == 0 &Strikes == 2) | c(Balls == 1 & Strikes == 2) | c(Balls == 2 & Strikes == 2)) %>% 
+  ggplot(aes(x = PlateSide, y = PlateHeight)) +
+  geom_point(aes(color = PitchType)) +
+  scale_color_manual(values = c("#006600", "#FF9900", "#000099", "red")) +
+  xlim(-5, 5) +
+  ylim(-1, 5) +
+  geom_path(aes(x, y), data = kZone)
+```
+
+### Best Whiff Probabilities Vs Right
+
+```{r}
+whiff_right %>% 
+  filter(c(Balls == 0 &Strikes == 2) | c(Balls == 1 & Strikes == 2) | c(Balls == 2 & Strikes == 2)) %>% 
+  top_n(20, whiff_prob) %>% 
+  ggplot(aes(x = PlateSide, y = PlateHeight)) +
+  geom_point(aes(color = PitchType, size = whiff_prob)) +
+  scale_color_manual(values = c("#006600", "#FF9900", "#000099", "red")) +
+  xlim(-5, 5) +
+  ylim(-1, 5) +
+  geom_path(aes(x, y), data = kZone)
+```
+
+### Worst Whiff Probabilities Vs Right
+
+```{r}
+whiff_right %>% 
+  filter(swing_prob > .5) %>% 
+  filter(c(Balls == 0 &Strikes == 2) | c(Balls == 1 & Strikes == 2) | c(Balls == 2 & Strikes == 2)) %>% 
+  top_n(-10, whiff_prob) %>% 
+  ggplot(aes(x = PlateSide, y = PlateHeight)) +
+  geom_point(aes(color = PitchType)) +
+  scale_color_manual(values = c("#FF9900", "#000099", "red")) +
+  xlim(-5, 5) +
+  ylim(-1, 5) +
+  geom_path(aes(x, y), data = kZone)
+```
+
+### Change in Whiff Probability Vs Right
+
+```{r}
+pitchers_right <- whiff_right %>% 
+  filter(c(Balls == 0 &Strikes == 2) | c(Balls == 1 & Strikes == 2) | c(Balls == 2 & Strikes == 2)) %>% 
+  group_by(PitchType) %>% 
+  summarise(avg_whiff = mean(whiff_prob))
+
+diff_pitchers_right <- whiff_right %>% 
+  group_by(PitchType) %>% 
+  summarise(total_avg_whiff = mean(whiff_prob)) %>% 
+  right_join(pitchers_right) %>% 
+  mutate(whiff_dif = avg_whiff - total_avg_whiff)
+
+kable(diff_pitchers_right, align = c(rep('c', 1)), col.names = c("Pitch Type", "Average Whiff Probability", "Average Whiff Probability in Pitchers's Count", "Change in Whiff Probability due to Count")) %>% 
+  row_spec(0) %>% 
+  kable_styling(full_width = T, bootstrap_options = "striped", font_size = 20) %>% 
+  add_header_above(c("Change in Whiff Probabilty in Pitcher's Counts Vs Right" = 4), background = "#006600", color = "white")
+
+```
+
+## Even Counts
+
+### Vs Left Total
+
+```{r}
+whiff_left %>% 
+  filter( c(Balls == 1 & Strikes == 1) | c(Balls == 3 & Strikes == 2)  | c(Balls == 2 & Strikes == 1)) %>% 
+  ggplot(aes(x = PlateSide, y = PlateHeight)) +
+  geom_point(aes(color = PitchType)) +
+  scale_color_manual(values = c("#006600", "#FF9900", "#000099", "red")) +
+  xlim(-5, 5) +
+  ylim(-1, 5) +
+  geom_path(aes(x, y), data = kZone)
+```
+
+### Best Whiff Probabilities Vs Left
+
+```{r}
+whiff_left %>% 
+  filter( c(Balls == 1 & Strikes == 1) | c(Balls == 3 & Strikes == 2) | c(Balls == 2 & Strikes == 1)) %>% 
+  top_n(20, whiff_prob) %>% 
+  ggplot(aes(x = PlateSide, y = PlateHeight)) +
+  geom_point(aes(color = PitchType, size = whiff_prob)) +
+  scale_color_manual(values = c("#006600", "#FF9900", "#000099", "red")) +
+  xlim(-5, 5) +
+  ylim(-1, 5) +
+  geom_path(aes(x, y), data = kZone)
+```
+
+### Worst Whiff Probabilities Vs Left
+
+```{r}
+whiff_left %>% 
+  filter(swing_prob > .5) %>% 
+  filter( c(Balls == 1 & Strikes == 1) | c(Balls == 3 & Strikes == 2) | c(Balls == 2 & Strikes == 1)) %>%
+  top_n(-10, whiff_prob) %>% 
+  ggplot(aes(x = PlateSide, y = PlateHeight)) +
+  geom_point(aes(color = PitchType)) +
+  scale_color_manual(values = c("red")) +
+  xlim(-5, 5) +
+  ylim(-1, 5) +
+  geom_path(aes(x, y), data = kZone)
+```
+
+### Change in Whiff Probability Vs Left
+
+```{r}
+even_left <- whiff_left %>% 
+  filter( c(Balls == 1 & Strikes == 1) | c(Balls == 3 & Strikes == 2) | c(Balls == 2 & Strikes == 1)) %>% 
+  group_by(PitchType) %>% 
+  summarise(avg_whiff = mean(whiff_prob))
+
+diff_even_left <- whiff_left %>% 
+  group_by(PitchType) %>% 
+  summarise(total_avg_whiff = mean(whiff_prob)) %>% 
+  right_join(even_left) %>% 
+  mutate(whiff_dif = avg_whiff - total_avg_whiff)
+
+kable(diff_even_left, align = c(rep('c', 1)), col.names = c("Pitch Type", "Average Whiff Probability", "Average Whiff Probability in Even Count", "Change in Whiff Probability due to Count")) %>% 
+  row_spec(0) %>% 
+  kable_styling(full_width = T, bootstrap_options = "striped", font_size = 20) %>% 
+  add_header_above(c("Change in Whiff Probabilty in Even Counts Vs Left" = 4), background = "#000099", color = "white")
+```
+
+### Vs Right Total
+
+```{r}
+whiff_right %>% 
+  filter( c(Balls == 1 & Strikes == 1) | c(Balls == 3 & Strikes == 2) | c(Balls == 2 & Strikes == 1)) %>% 
+  ggplot(aes(x = PlateSide, y = PlateHeight)) +
+  geom_point(aes(color = PitchType)) +
+  scale_color_manual(values = c("#006600", "#FF9900", "#000099", "red")) +
+  xlim(-5, 5) +
+  ylim(-1, 5) +
+  geom_path(aes(x, y), data = kZone)
+```
+
+### Best Whiff Probabilities Vs Right
+
+```{r}
+whiff_right %>% 
+  filter( c(Balls == 1 & Strikes == 1) | c(Balls == 3 & Strikes == 2) | c(Balls == 2 & Strikes == 1)) %>% 
+  top_n(20, whiff_prob) %>% 
+  ggplot(aes(x = PlateSide, y = PlateHeight)) +
+  geom_point(aes(color = PitchType, size = whiff_prob)) +
+  scale_color_manual(values = c("#006600", "#FF9900", "#000099", "red")) +
+  xlim(-5, 5) +
+  ylim(-1, 5) +
+  geom_path(aes(x, y), data = kZone)
+```
+
+### Worst Whiff Probabilities Vs Right
+
+```{r}
+whiff_right %>% 
+  filter(swing_prob > .5) %>% 
+  filter( c(Balls == 1 & Strikes == 1) | c(Balls == 3 & Strikes == 2) | c(Balls == 2 & Strikes == 1)) %>% 
+  top_n(-10, whiff_prob) %>% 
+  ggplot(aes(x = PlateSide, y = PlateHeight)) +
+  geom_point(aes(color = PitchType)) +
+  scale_color_manual(values = c("#FF9900", "#000099", "red")) +
+  xlim(-5, 5) +
+  ylim(-1, 5) +
+  geom_path(aes(x, y), data = kZone)
+```
+
+### Change in Whiff Probability Vs Right
+
+```{r}
+even_right <- whiff_right %>% 
+  filter( c(Balls == 1 & Strikes == 1) | c(Balls == 3 & Strikes == 2)  | c(Balls == 2 & Strikes == 1)) %>% 
+  group_by(PitchType) %>% 
+  summarise(avg_whiff = mean(whiff_prob))
+
+diff_even_right <- whiff_right %>% 
+  group_by(PitchType) %>% 
+  summarise(total_avg_whiff = mean(whiff_prob)) %>% 
+  right_join(even_right) %>% 
+  mutate(whiff_dif = avg_whiff - total_avg_whiff)
+
+kable(diff_even_right, align = c(rep('c', 1)), col.names = c("Pitch Type", "Average Whiff Probability", "Average Whiff Probability in Even Count", "Change in Whiff Probability due to Count")) %>% 
+  row_spec(0) %>% 
+  kable_styling(full_width = T, bootstrap_options = "striped", font_size = 20) %>% 
+  add_header_above(c("Change in Whiff Probabilty in Even Counts Vs Right" = 4), background = "#006600", color = "white")
+```
+
+## Early Counts
+
+### Vs Left Total
+
+```{r}
+whiff_left %>% 
+  filter( c(Balls == 0 & Strikes == 0) | c(Balls == 0 & Strikes == 1) | c(Balls == 1 & Strikes == 0)) %>%
+  ggplot(aes(x = PlateSide, y = PlateHeight)) +
+  geom_point(aes(color = PitchType)) +
+  scale_color_manual(values = c("#006600", "#FF9900", "#000099", "red")) +
+  xlim(-5, 5) +
+  ylim(-1, 5) +
+  geom_path(aes(x, y), data = kZone)
+```
+
+### Best Whiff Probabilities Vs Left
+
+```{r}
+whiff_left %>% 
+  filter( c(Balls == 0 & Strikes == 0) | c(Balls == 0 & Strikes == 1) | c(Balls == 1 & Strikes == 0)) %>% 
+  top_n(20, whiff_prob) %>% 
+  ggplot(aes(x = PlateSide, y = PlateHeight)) +
+  geom_point(aes(color = PitchType, size = whiff_prob)) +
+  scale_color_manual(values = c("#006600", "#FF9900", "#000099", "red")) +
+  xlim(-5, 5) +
+  ylim(-1, 5) +
+  geom_path(aes(x, y), data = kZone)
+```
+
+### Worst Whiff Probabilities Vs Left
+
+```{r}
+whiff_left %>% 
+  filter(swing_prob > .5) %>% 
+  filter( c(Balls == 0 & Strikes == 0) | c(Balls == 0 & Strikes == 1) | c(Balls == 1 & Strikes == 0)) %>% 
+  top_n(-10, whiff_prob) %>% 
+  ggplot(aes(x = PlateSide, y = PlateHeight)) +
+  geom_point(aes(color = PitchType)) +
+  scale_color_manual(values = c("red")) +
+  xlim(-5, 5) +
+  ylim(-1, 5) +
+  geom_path(aes(x, y), data = kZone)
+```
+
+### Change in Whiff Probability Vs Left
+
+```{r}
+early_left <- whiff_left %>% 
+  filter( c(Balls == 0 & Strikes == 0) | c(Balls == 0 & Strikes == 1) | c(Balls == 1 & Strikes == 0)) %>%  
+  group_by(PitchType) %>% 
+  summarise(avg_whiff = mean(whiff_prob))
+
+diff_early_left <- whiff_left %>% 
+  group_by(PitchType) %>% 
+  summarise(total_avg_whiff = mean(whiff_prob)) %>% 
+  right_join(early_left) %>% 
+  mutate(whiff_dif = avg_whiff - total_avg_whiff)
+
+kable(diff_early_left, align = c(rep('c', 1)), col.names = c("Pitch Type", "Average Whiff Probability", "Average Whiff Probability in Early Counts", "Change in Whiff Probability due to Count")) %>% 
+  row_spec(0) %>% 
+  kable_styling(full_width = T, bootstrap_options = "striped", font_size = 20) %>% 
+  add_header_above(c("Change in Whiff Probabilty in Early Counts Vs Left" = 4), background = "#000099", color = "white")
+```
+
+
+
+### Vs Right Total
+
+```{r}
+whiff_right %>% 
+  filter( c(Balls == 0 & Strikes == 0) | c(Balls == 0 & Strikes == 1) | c(Balls == 1 & Strikes == 0)) %>%
+  ggplot(aes(x = PlateSide, y = PlateHeight)) +
+  geom_point(aes(color = PitchType)) +
+  scale_color_manual(values = c("#006600", "#FF9900", "#000099", "red")) +
+  xlim(-5, 5) +
+  ylim(-1, 5) +
+  geom_path(aes(x, y), data = kZone)
+```
+
+### Best Whiff Probabilities Vs Right
+
+```{r}
+whiff_right %>% 
+  filter( c(Balls == 0 & Strikes == 0) | c(Balls == 0 & Strikes == 1) | c(Balls == 1 & Strikes == 0)) %>% 
+  top_n(20, whiff_prob) %>% 
+  ggplot(aes(x = PlateSide, y = PlateHeight)) +
+  geom_point(aes(color = PitchType, size = whiff_prob)) +
+  scale_color_manual(values = c("#006600", "#FF9900", "#000099", "red")) +
+  xlim(-5, 5) +
+  ylim(-1, 5) +
+  geom_path(aes(x, y), data = kZone)
+```
+
+### Worst Whiff Probabilities Vs Right
+
+```{r}
+whiff_left %>% 
+  filter(swing_prob > .5) %>% 
+  filter( c(Balls == 0 & Strikes == 0) | c(Balls == 0 & Strikes == 1) | c(Balls == 1 & Strikes == 0)) %>% 
+  top_n(-10, whiff_prob) %>% 
+  ggplot(aes(x = PlateSide, y = PlateHeight)) +
+  geom_point(aes(color = PitchType)) +
+  scale_color_manual(values = c("red")) +
+  xlim(-5, 5) +
+  ylim(-1, 5) +
+  geom_path(aes(x, y), data = kZone)
+```
+
+### Change in Whiff Probability Vs Right
+
+```{r}
+early_right <- whiff_right %>% 
+  filter( c(Balls == 0 & Strikes == 0) | c(Balls == 0 & Strikes == 1) | c(Balls == 1 & Strikes == 0)) %>%  
+  group_by(PitchType) %>% 
+  summarise(avg_whiff = mean(whiff_prob))
+
+diff_early_right <- whiff_right %>% 
+  group_by(PitchType) %>% 
+  summarise(total_avg_whiff = mean(whiff_prob)) %>% 
+  right_join(early_right) %>% 
+  mutate(whiff_dif = avg_whiff - total_avg_whiff)
+
+kable(diff_early_right, align = c(rep('c', 1)), col.names = c("Pitch Type", "Average Whiff Probability", "Average Whiff Probability in Early Counts", "Change in Whiff Probability due to Count")) %>% 
+  row_spec(0) %>% 
+  kable_styling(full_width = T, bootstrap_options = "striped", font_size = 20) %>% 
+  add_header_above(c("Change in Whiff Probabilty in Early Counts Vs Right" = 4), background = "#006600", color = "white")
+```
+
+## Takeaways from this section
+The biggest takeaway is how much better the curveball gets in pitcher's counts, especially to lefties. The other big takeaway is that other than in hitter's counts the best whiff probabilities are almost all out of the zone. This tells us that if Pitcher X is looking for a swing and miss he can't be afraid to let the movement take the ball out of the zone in all kinds of counts. Changeups and cutters in their respective best locations remain the best for almost every count, which is to be expected but lets us know again that these two pitches should make up a large portion of the pitcher's usage. Fastballs are best early in the count and in hitter's counts. Cutters always pretty good but are effected the best by the count in hitter's count vs right, even count vs left, and all early counts. Changeups are always the best whiff probability in the count except pitcher's count vs left, telling us again that they are being underutilized.  
+
+- Vs Left: Fastballs should more come in even, early, or hitter's counts. Cutters should more come in even or early counts. Changeups should come in all counts because they are best. Curveballs should come a lot more in pitcher's counts and a little more in even counts. 
+
+- Vs Right: Fastballs should come more in hitter's and pitcher's counts. Cutters should come more in early and hitter's counts. Changeups should come in all counts, but the most in even counts. Curveballs should come more in pitcher's counts. 
+
+
+# Conclusions
+
+- Changeup usage vs right increasing is the easiest way to see higher whiff probabilities. 
+    - It is his best pitch and should be used as such.
+- Fastballs down in the zone are almost always the worst whiff probability pitches.
+    - Pitcher X need to make sure Fastballs are at the top of the zone.
+- Curveballs are much more effective when thrown below the zone and when thrown in pitcher's counts especially vs lefities.
+    - Thus they should be used more in those counts than they are in others. 
+    - Spins it well, so it could be a very effective pitch.
+- Cut and Change are better when they have lower induced vertical break.
+    - If Pitcher X can find a cue in bullpens to make this movement more consistent these two pitches will be even better.
+- The best pitches are the best pitches in all counts, but usage based on how the pitch is effected in the count can help optimize whiff probability.
+- Most of the best whiff probabilities are outside of the zone, so Pitcher X can't be afraid to throw just out of the zone to get swing and miss. 
